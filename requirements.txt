@@ -1,2 +1,4 @@
 ollama
 pypdf
+sentence-transformers
+transformers

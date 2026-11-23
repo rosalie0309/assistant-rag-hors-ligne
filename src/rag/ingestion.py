@@ -1,23 +1,44 @@
-"""Module 2 : lecture des PDF et découpage en morceaux (chunks)."""
+"""Module 2 : lecture des PDF et découpage en morceaux (chunks).
+
+Les morceaux visent TAILLE_CHUNK caractères, sans jamais dépasser
+MAX_TOKENS tokens, la limite du modèle de plongements.
+"""
 import json
 import re
 from pathlib import Path
 
 from pypdf import PdfReader
-# PyMuPDF tient mieux compte de la mise en page et des légendes
-# Après évaluation avec pypdf nous verrons si nous devons changer 
-# de bibliothèque pour l'extraction du texte.
+from transformers import AutoTokenizer
 
 DOSSIER_PDF = Path("data/raw")
 FICHIER_SORTIE = Path("data/processed/chunks.jsonl")
-TAILLE_CHUNK = 800     # en caractères
-CHEVAUCHEMENT = 150    # en caractères
+TAILLE_CHUNK = 800   # cible, en caractères
+CHEVAUCHEMENT = 150  # en caractères
+MAX_TOKENS = 250     # garantie : limite du modèle (256) moins les tokens [CLS] et [SEP]
+
+TOKENISEUR = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+
+
+def compter_tokens(texte: str) -> int:
+    return len(TOKENISEUR.encode(texte))
 
 
 def nettoyer(texte: str) -> str:
     texte = re.sub(r"-\n(\w)", r"\1", texte)  # recolle les mots coupés en fin de ligne
     texte = re.sub(r"\s+", " ", texte)         # supprime les espaces et retours à la ligne en trop
     return texte.strip()
+
+
+def ajuster_fin(texte: str, debut: int, fin: int) -> int:
+    """Recule la fin du morceau tant qu'il dépasse MAX_TOKENS."""
+    while compter_tokens(texte[debut:fin]) > MAX_TOKENS:
+        nouvelle_fin = texte.rfind(". ", debut, fin - 1)  # fin de la phrase précédente
+        if nouvelle_fin <= debut + 100:
+            nouvelle_fin = texte.rfind(" ", debut, fin - 1)  # sinon, le mot précédent
+        if nouvelle_fin <= debut:
+            break
+        fin = nouvelle_fin + 1
+    return fin
 
 
 def decouper(texte: str, taille: int, chevauchement: int) -> list[str]:
@@ -30,8 +51,9 @@ def decouper(texte: str, taille: int, chevauchement: int) -> list[str]:
             point = texte.rfind(". ", debut, fin)
             if point > debut + taille // 2:
                 fin = point + 1
+        fin = ajuster_fin(texte, debut, fin)  # garantie sur le nombre de tokens
         morceaux.append(texte[debut:fin].strip())
-        if fin == len(texte):
+        if fin >= len(texte):
             break
         # le morceau suivant commence dans la zone de chevauchement,
         # de préférence au début d'une phrase, sinon au début d'un mot
@@ -61,6 +83,7 @@ def main():
                         "id": f"{chemin.stem}_p{num_page}_c{i}",
                         "source": chemin.name,
                         "page": num_page,
+                        "num_chunk": i,
                         "texte": morceau,
                     }
                     sortie.write(json.dumps(chunk, ensure_ascii=False) + "\n")
